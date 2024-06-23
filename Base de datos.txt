@@ -1,0 +1,289 @@
+-- CREATE DATABASE prueba1
+-- Crear la tabla CLIENTES
+CREATE TABLE CLIENTES (
+    CLICODIGO INT AUTO_INCREMENT PRIMARY KEY,
+    CLINOMBRE1 VARCHAR(60) NOT NULL,
+    CLINOMBRE2 VARCHAR(60),
+    CLIAPELLIDO1 VARCHAR(60) NOT NULL,
+    CLIAPELLIDO2 VARCHAR(60),
+    CLINOMBRE VARCHAR(60) NOT NULL,
+    CLIIDENTIFICACION VARCHAR(10) NOT NULL UNIQUE,
+    CLIDIRECCION VARCHAR(60) NOT NULL,
+    CLITELEFONO VARCHAR(9) NOT NULL,
+    CLICELULAR VARCHAR(10) NOT NULL,
+    CLIEMAIL VARCHAR(60),
+    CLITIPO ENUM('VIP', 'NOR', 'EMP') NOT NULL,
+    CLISTATUS ENUM('ACT', 'INA') NOT NULL,
+    CLIIMAGEN LONGBLOB,
+    CONSTRAINT CK_CLITELEFONO CHECK (CHAR_LENGTH(CLITELEFONO) = 9 AND CLITELEFONO REGEXP '^[0-9]+$'),
+    CONSTRAINT CK_CLICELULAR CHECK (CHAR_LENGTH(CLICELULAR) = 10 AND CLICELULAR REGEXP '^[0-9]+$'),
+    CONSTRAINT CK_CLIEMAIL CHECK (CLIEMAIL IS NULL OR CLIEMAIL REGEXP '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$')
+);
+
+-- Crear la tabla FACTURAS (Master-Detail)
+CREATE TABLE FACTURAS (
+    FACNUMERO INT AUTO_INCREMENT PRIMARY KEY,
+    CLICODIGO INT NOT NULL,
+    FACFECHA DATE NOT NULL,
+    FACSUBTOTAL DECIMAL(9,2) NOT NULL,
+    FACIVA DECIMAL(9,2),
+    FACTOTAL DECIMAL(9,2) NOT NULL,
+    FACSTATUS ENUM('ACTIVA', 'ANULADA') NOT NULL DEFAULT 'ACTIVA',
+    CONSTRAINT FK_FACTURAS_CLICODIGO FOREIGN KEY (CLICODIGO) REFERENCES CLIENTES(CLICODIGO)
+);
+
+-- Crear la tabla débil (relación entre factura y cliente)
+CREATE TABLE FACTURA_CLIENTE (
+    FACNUMERO INT NOT NULL,
+    CLICODIGO INT NOT NULL,
+    PRIMARY KEY (FACNUMERO, CLICODIGO),
+    CONSTRAINT FK_FACTURA_CLIENTE_FACTURA FOREIGN KEY (FACNUMERO) REFERENCES FACTURAS(FACNUMERO),
+    CONSTRAINT FK_FACTURA_CLIENTE_CLIENTE FOREIGN KEY (CLICODIGO) REFERENCES CLIENTES(CLICODIGO)
+);
+SELECT * FROM FACTURA_CLIENTE
+
+-- Crear la tabla PRODUCTOS
+CREATE TABLE PRODUCTOS (
+    PROCODIGO VARCHAR(10) PRIMARY KEY,
+    PRODESCRIPCION VARCHAR(100) NOT NULL,
+    PROUNIDADMEDIDA VARCHAR(10) NOT NULL,
+    PROSALDOINICIAL DECIMAL(9,2) NOT NULL,
+    PROINGRESOS DECIMAL(9,2) NOT NULL,
+    PROEGRESOS DECIMAL(9,2) NOT NULL,
+    PROAJUSTES DECIMAL(9,2) NOT NULL,
+    PROSALDOFINAL DECIMAL(9,2) NOT NULL,
+    PROCOSTOUM DECIMAL(7,2) NOT NULL,
+    PROPRECIOUM DECIMAL(7,2) NOT NULL,
+    PROSTATUS ENUM('ACT', 'INA', 'DES') NOT NULL,
+    PROIMAGEN LONGBLOB
+);
+
+-- Crear la tabla DETALLES_FACTURA (Productos por factura)
+CREATE TABLE DETALLES_FACTURA (
+    DETALLEID INT AUTO_INCREMENT PRIMARY KEY,
+    FACNUMERO INT NOT NULL,
+    PROCODIGO VARCHAR(10) NOT NULL,
+    CANTIDAD INT NOT NULL,
+    PRECIOUNITARIO DECIMAL(9,2) NOT NULL,
+    SUBTOTAL DECIMAL(9,2) NOT NULL,
+    CONSTRAINT FK_DETALLES_FACTURA_FACTURA FOREIGN KEY (FACNUMERO) REFERENCES FACTURAS(FACNUMERO),
+    CONSTRAINT FK_DETALLES_FACTURA_PRODUCTO FOREIGN KEY (PROCODIGO) REFERENCES PRODUCTOS(PROCODIGO)
+);
+SELECT * FROM DETALLES_FACTURA
+
+-- Insertar datos en la tabla CLIENTES
+
+
+-- Consultar identificaciones y teléfonos de los clientes
+SELECT CLIIDENTIFICACION, CLITELEFONO FROM CLIENTES;
+
+-- Consultar todos los productos
+SELECT * FROM PRODUCTOS;
+
+-- Consultar todos los clientes
+SELECT * FROM CLIENTES;
+
+-- Consultar todas las facturas
+SELECT * FROM FACTURAS;
+
+
+SELECT * FROM FACTURA_CLIENTE
+
+       
+
+DELIMITER //
+
+CREATE PROCEDURE GuardarDetallesFactura(
+    IN p_facNumero CHAR(9),
+    IN p_cliCodigo INT,
+    IN p_facFecha DATE,
+    IN p_facSubtotal DECIMAL(9,2),
+    IN p_facIva DECIMAL(9,2),
+    IN p_facTotal DECIMAL(9,2),
+    IN p_facStatus ENUM('ACTIVA', 'ANULADA'),
+    IN p_productos TEXT
+)
+BEGIN
+    DECLARE v_facturaCodigo INT;
+    DECLARE v_ingresos DECIMAL(9,2);
+    DECLARE v_proegresos DECIMAL(9,2);
+    DECLARE v_prostatus ENUM('ACT', 'INA', 'DES');
+
+    -- Insertar en la tabla FACTURAS
+    INSERT INTO FACTURAS (FACNUMERO, CLICODIGO, FACFECHA, FACSUBTOTAL, FACIVA, FACTOTAL, FACSTATUS)
+    VALUES (p_facNumero, p_cliCodigo, p_facFecha, p_facSubtotal, p_facIva, p_facTotal, p_facStatus);
+
+    -- Obtener el último código de factura insertado
+    SET v_facturaCodigo = LAST_INSERT_ID();
+
+    -- Insertar en la tabla FACTURA_CLIENTE
+    INSERT INTO FACTURA_CLIENTE (FACNUMERO, CLICODIGO)
+    VALUES (v_facturaCodigo, p_cliCodigo);
+
+    -- Procesar los productos y insertarlos en DETALLES_FACTURA
+    WHILE LOCATE(';', p_productos) > 0 DO
+        SET @producto = SUBSTRING_INDEX(p_productos, ';', 1);
+        SET p_productos = SUBSTRING(p_productos, LOCATE(';', p_productos) + 1);
+
+        SET @proCodigo = SUBSTRING_INDEX(@producto, ',', 1);
+        SET @resto = SUBSTRING(@producto, LOCATE(',', @producto) + 1);
+        SET @cantidad = SUBSTRING_INDEX(@resto, ',', 1);
+        SET @resto = SUBSTRING(@resto, LOCATE(',', @resto) + 1);
+        SET @precioUnitario = SUBSTRING_INDEX(@resto, ',', 1);
+        SET @subtotal = SUBSTRING(@resto, LOCATE(',', @resto) + 1);
+
+        -- Verificar el estado del producto
+        SELECT PROINGRESOS, PROEGRESOS, PROSTATUS INTO v_ingresos, v_proegresos, v_prostatus FROM PRODUCTOS WHERE PROCODIGO = @proCodigo;
+        IF v_prostatus = 'INA' OR v_prostatus = 'DES' THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Producto no disponible';
+        END IF;
+
+        -- Verificar si los egresos no superan los ingresos
+        IF (v_proegresos + @cantidad) > v_ingresos THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Egresos no pueden exceder los ingresos';
+        END IF;
+
+        -- Insertar en DETALLES_FACTURA
+        INSERT INTO DETALLES_FACTURA (FACNUMERO, PROCODIGO, CANTIDAD, PRECIOUNITARIO, SUBTOTAL)
+        VALUES (v_facturaCodigo, @proCodigo, @cantidad, @precioUnitario, @subtotal);
+
+        -- Actualizar PROEGRESOS en la tabla PRODUCTOS
+        UPDATE PRODUCTOS
+        SET PROEGRESOS = PROEGRESOS + @cantidad
+        WHERE PROCODIGO = @proCodigo;
+    END WHILE;
+END //
+
+DELIMITER ;
+
+
+
+INSERT INTO CLIENTES (CLINOMBRE1, CLINOMBRE2, CLIAPELLIDO1, CLIAPELLIDO2, CLINOMBRE, CLIIDENTIFICACION, CLIDIRECCION, CLITELEFONO, CLICELULAR, CLIEMAIL, CLITIPO, CLISTATUS, CLIIMAGEN) VALUES
+('Juan', 'Carlos', 'Pérez', 'López', 'Juan Carlos Pérez López', '1712345678', 'Av. Amazonas N36-145', '022345678', '0998765432', 'juan.perez@example.com', 'NOR', 'ACT', NULL),
+('Ana', 'María', 'García', 'Hidalgo', 'Ana María García Hidalgo', '1809876543', 'Calle El Comercio 245', '033456789', '0987654321', 'ana.garcia@example.com', 'VIP', 'ACT', NULL),
+('Luis', 'Miguel', 'Chávez', 'Flores', 'Luis Miguel Chávez Flores', '1723456789', 'Av. La Prensa N55-123', '022346789', '0976543210', 'luis.chavez@example.com', 'EMP', 'INA', NULL),
+('María', 'José', 'Torres', 'Quispe', 'María José Torres Quispe', '1801234567', 'Calle La Ronda 789', '033567890', '0965432109', 'maria.torres@example.com', 'NOR', 'ACT', NULL),
+('Carlos', 'Eduardo', 'Morales', 'Ruiz', 'Carlos Eduardo Morales Ruiz', '1710987654', 'Av. Colón y 6 de Diciembre', '022457890', '0954321098', 'carlos.morales@example.com', 'EMP', 'ACT', NULL);
+
+-- Insertar datos en la tabla PRODUCTOS
+INSERT INTO PRODUCTOS (PROCODIGO, PRODESCRIPCION, PROUNIDADMEDIDA, PROSALDOINICIAL, PROINGRESOS, PROEGRESOS, PROAJUSTES, PROSALDOFINAL, PROCOSTOUM, PROPRECIOUM, PROSTATUS, PROIMAGEN) VALUES
+('P001', 'Arroz San Andrés', 'Kilogramos', 1000, 500, 200, 0, 1300, 0.80, 1.00, 'ACT', NULL),
+('P002', 'Azúcar Los Andes', 'Kilogramos', 800, 300, 100, 0, 1000, 0.70, 0.90, 'ACT', NULL),
+('P003', 'Leche Gloria', 'Litros', 500, 200, 50, 0, 650, 0.90, 1.20, 'INA', NULL),
+('P004', 'Aceite La Favorita', 'Litros', 600, 400, 200, 0, 800, 1.50, 2.00, 'DES', NULL),
+('P005', 'Pan Integral', 'Unidades', 400, 150, 50, 0, 500, 0.30, 0.50, 'ACT', NULL);
+
+
+INSERT INTO PRODUCTOS (PROCODIGO, PRODESCRIPCION, PROUNIDADMEDIDA, PROSALDOINICIAL, PROINGRESOS, PROEGRESOS, PROAJUSTES, PROSALDOFINAL, PROCOSTOUM, PROPRECIOUM, PROSTATUS, PROIMAGEN) VALUES
+('P006', 'Fideos La Moderna', 'Kilogramos', 900, 400, 150, 0, 1150, 0.60, 0.80, 'ACT', NULL),
+('P007', 'Harina Pan', 'Kilogramos', 700, 350, 100, 0, 950, 0.50, 0.70, 'ACT', NULL),
+('P008', 'Café Soluble Nestlé', 'Gramos', 400, 200, 70, 0, 530, 3.00, 4.00, 'INA', NULL),
+('P009', 'Cereal Choco Krispis', 'Cajas', 500, 250, 120, 0, 630, 2.00, 2.50, 'DES', NULL),
+('P010', 'Galletas María', 'Paquetes', 800, 300, 200, 0, 900, 1.00, 1.20, 'ACT', NULL);
+
+
+SELECT * FROM clientes
+SELECT * FROM productos 
+SELECT * FROM FACTURAS;
+SELECT * FROM FACTURA_CLIENTE
+SELECT * FROM detalles_factura
+SELECT * FROM Salidas
+SELECT * FROM PRODUCTOS_SALIDAS
+-- Crear la tabla SALIDAS
+CREATE TABLE SALIDAS (
+    SALID INT AUTO_INCREMENT PRIMARY KEY,
+    SALFECHA DATE NOT NULL,
+    FACNUMERO INT NOT NULL,
+    CANTIDAD_TOTAL INT NOT NULL,
+    CONSTRAINT FK_SALIDAS_FACNUMERO FOREIGN KEY (FACNUMERO) REFERENCES FACTURAS(FACNUMERO)
+);
+
+-- Crear la tabla PRODUCTOS_SALIDAS
+CREATE TABLE PRODUCTOS_SALIDAS (
+    PROSALIDAID INT AUTO_INCREMENT PRIMARY KEY,
+    SALID INT NOT NULL,
+    PROCODIGO VARCHAR(10) NOT NULL,
+    CANTIDAD INT NOT NULL,
+    PRECIOUNITARIO DECIMAL(9,2) NOT NULL,
+    SUBTOTAL DECIMAL(9,2) NOT NULL,
+    CONSTRAINT FK_PRODUCTOS_SALIDAS_SALID FOREIGN KEY (SALID) REFERENCES SALIDAS(SALID),
+    CONSTRAINT FK_PRODUCTOS_SALIDAS_PROCODIGO FOREIGN KEY (PROCODIGO) REFERENCES PRODUCTOS(PROCODIGO)
+);
+
+DROP PROCEDURE GuardarDetallesFactura
+DELIMITER //
+
+CREATE PROCEDURE GuardarDetallesFactura(
+    IN p_facNumero INT,
+    IN p_cliCodigo INT,
+    IN p_facFecha DATE,
+    IN p_facSubtotal DECIMAL(9,2),
+    IN p_facIva DECIMAL(9,2),
+    IN p_facTotal DECIMAL(9,2),
+    IN p_facStatus ENUM('ACTIVA', 'ANULADA'),
+    IN p_productos TEXT
+)
+BEGIN
+    DECLARE v_facturaCodigo INT;
+    DECLARE v_salidaId INT;
+    DECLARE v_cantidadTotal INT DEFAULT 0;
+
+    -- Insertar en la tabla FACTURAS
+    INSERT INTO FACTURAS (FACNUMERO, CLICODIGO, FACFECHA, FACSUBTOTAL, FACIVA, FACTOTAL, FACSTATUS)
+    VALUES (p_facNumero, p_cliCodigo, p_facFecha, p_facSubtotal, p_facIva, p_facTotal, p_facStatus);
+
+    -- Obtener el último número de factura insertado
+    SET v_facturaCodigo = LAST_INSERT_ID();
+
+    -- Insertar en la tabla FACTURA_CLIENTE
+    INSERT INTO FACTURA_CLIENTE (FACNUMERO, CLICODIGO)
+    VALUES (v_facturaCodigo, p_cliCodigo);
+
+    -- Procesar los productos y insertarlos en DETALLES_FACTURA
+    WHILE LOCATE(';', p_productos) > 0 DO
+        SET @producto = SUBSTRING_INDEX(p_productos, ';', 1);
+        SET p_productos = SUBSTRING(p_productos, LOCATE(';', p_productos) + 1);
+
+        SET @proCodigo = SUBSTRING_INDEX(@producto, ',', 1);
+        SET @resto = SUBSTRING(@producto, LOCATE(',', @producto) + 1);
+        SET @cantidad = SUBSTRING_INDEX(@resto, ',', 1);
+        SET @resto = SUBSTRING(@resto, LOCATE(',', @resto) + 1);
+        SET @precioUnitario = SUBSTRING_INDEX(@resto, ',', 1);
+        SET @subtotal = SUBSTRING(@resto, LOCATE(',', @resto) + 1);
+
+        -- Insertar en DETALLES_FACTURA
+        INSERT INTO DETALLES_FACTURA (FACNUMERO, PROCODIGO, CANTIDAD, PRECIOUNITARIO, SUBTOTAL)
+        VALUES (v_facturaCodigo, @proCodigo, @cantidad, @precioUnitario, @subtotal);
+
+        -- Sumar la cantidad al total de productos
+        SET v_cantidadTotal = v_cantidadTotal + @cantidad;
+    END WHILE;
+
+    -- Insertar en la tabla SALIDAS
+    INSERT INTO SALIDAS (SALFECHA, FACNUMERO, CANTIDAD_TOTAL)
+    VALUES (p_facFecha, v_facturaCodigo, v_cantidadTotal);
+
+    -- Obtener el último ID de salida insertado
+    SET v_salidaId = LAST_INSERT_ID();
+
+    -- Restablecer p_productos para recorrerlo nuevamente
+    SET p_productos = REPLACE(REPLACE(p_productos, ';', ';'), ',', ',');
+
+    -- Procesar los productos nuevamente y insertarlos en PRODUCTOS_SALIDAS
+    WHILE LOCATE(';', p_productos) > 0 DO
+        SET @producto = SUBSTRING_INDEX(p_productos, ';', 1);
+        SET p_productos = SUBSTRING(p_productos, LOCATE(';', p_productos) + 1);
+
+        SET @proCodigo = SUBSTRING_INDEX(@producto, ',', 1);
+        SET @resto = SUBSTRING(@producto, LOCATE(',', @producto) + 1);
+        SET @cantidad = SUBSTRING_INDEX(@resto, ',', 1);
+        SET @resto = SUBSTRING(@resto, LOCATE(',', @resto) + 1);
+        SET @precioUnitario = SUBSTRING_INDEX(@resto, ',', 1);
+
+        -- Insertar en PRODUCTOS_SALIDAS
+        INSERT INTO PRODUCTOS_SALIDAS (SALID, PROCODIGO, CANTIDAD, PRECIOUNITARIO)
+        VALUES (v_salidaId, @proCodigo, @cantidad, @precioUnitario);
+    END WHILE;
+END //
+
+DELIMITER ;
